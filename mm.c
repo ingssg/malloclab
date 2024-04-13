@@ -56,8 +56,8 @@ team_t team = {
 #define GET(p) (*(unsigned int *) (p))  // 해당 주소의 val 값을 가져옴
 #define PUT(p, val) (*(unsigned int *)(p) = (val))  // 해당 주소에 val을 넣어줌
 
-#define GET_SIZE(p) (GET(p) & ~0x7)
-#define GET_ALLOC(p) (GET(p) & 0x1)
+#define GET_SIZE(p) (GET(p) & ~0x7) // 11111000
+#define GET_ALLOC(p) (GET(p) & 0x1) // 00000001
 
 #define HDRP(bp) ((char *)(bp) - WSIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
@@ -73,6 +73,7 @@ void *mm_malloc(size_t size);
 void *mm_realloc(void *ptr, size_t size);
 static void *first_fit(size_t asize);
 static void *next_fit(size_t asize);
+static void *best_fit(size_t asize);
 static void place(void *ptr, size_t asize);
 
 
@@ -136,7 +137,7 @@ void *mm_malloc(size_t size)
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE-1)) / DSIZE);
     
-    if ((ptr = (char *)next_fit(asize)) != NULL) {    // NULL이 아니면 >> 가용블록 찾았다! 
+    if ((ptr = (char *)best_fit(asize)) != NULL) {    // NULL이 아니면 >> 가용블록 찾았다! 
         place(ptr, asize);  
         return ptr;
     }
@@ -157,7 +158,7 @@ void *mm_malloc(size_t size)
     // }
 }
 
-static void *first_fit(size_t asize) {
+static void *first_fit(size_t asize) {  // 처음부터 나보다 사이즈 큰 가용블록 찾기
     void *ptr;
     for(ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
         if(!GET_ALLOC(HDRP(ptr)) && asize <= GET_SIZE(HDRP(ptr))) {
@@ -167,7 +168,7 @@ static void *first_fit(size_t asize) {
     return NULL;    // 맞는게 없음.
 }
 
-static void *next_fit(size_t asize) {
+static void *next_fit(size_t asize) {   // 앞으로 쭉 가면서 찾기
     void *ptr;
     for(ptr = current_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
         if(!GET_ALLOC(HDRP(ptr)) && asize <= GET_SIZE(HDRP(ptr))) {
@@ -178,7 +179,20 @@ static void *next_fit(size_t asize) {
     return NULL;
 }
 
-static void place(void *ptr, size_t asize) {
+static void *best_fit(size_t asize) {
+    void *ptr, *min_ptr = NULL;
+    for(ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0; ptr = NEXT_BLKP(ptr)) {
+        if(!GET_ALLOC(HDRP(ptr)) && asize <= GET_SIZE(HDRP(ptr))) {
+            if(min_ptr == NULL) min_ptr = ptr;
+            if(GET_SIZE(HDRP(ptr)) < GET_SIZE(HDRP(min_ptr)))
+                min_ptr = ptr;
+        }
+    }
+    if(min_ptr == NULL) return NULL;
+    return min_ptr;
+}
+
+static void place(void *ptr, size_t asize) {    // 가용블록을 (할당블록 / 가용블록)으로 나눠주는 함수
     size_t csize = GET_SIZE(HDRP(ptr));     // 나눠먹을 수 있는 가용 블록
 
     if ((csize - asize) >= 2*DSIZE) {   // 내가 사용하고 남은 블록의 사이즈가 2더블워드보다 클 때
@@ -207,7 +221,7 @@ void mm_free(void *ptr)
     coalesce(ptr);
 }
 
-static void *coalesce(void *ptr) {
+static void *coalesce(void *ptr) {      // 합체함수, 블록단위로 검사하니까 가운데에 남는 전 블록 푸터, 내 블록헤더 푸터, 뒷블록 헤더는 읽히지가 않아서 어차피 데이터 넣으면 갈아끼워짐
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(ptr)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
     size_t size = GET_SIZE(HDRP(ptr));
