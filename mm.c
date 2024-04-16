@@ -46,7 +46,7 @@ team_t team = {
 // 사이즈 상수 정의
 #define WSIZE 4
 #define DSIZE 8
-#define CHUNKSIZE (1 << 12)
+#define CHUNKSIZE (1 << 9)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -64,27 +64,27 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))
 
-#define PRED(bp) (GET(bp))
-#define SUCC(bp) (GET(bp + WSIZE))
+// #define PRED(bp) (GET(bp))
+#define PRED(bp) (*(void **)(bp))
+#define SUCC(bp) (*(void **)(bp + WSIZE))
+
+#define SEG_SIZE (12)
+#define GET_ROOT(class) (*(void **)((char *)(heap_listp) + WSIZE*class))
 
 int mm_init(void);
 static void *extend_heap(size_t words);
 void mm_free(void *ptr);
-static void *coalesce(void *ptr);
 static void *coalesce_ex(void *ptr);
 void *mm_malloc(size_t size);
 void *mm_realloc(void *ptr, size_t size);
-static void *first_fit(size_t asize);
-static void *first_fit_ex(size_t asize);
-static void *next_fit(size_t asize);
-static void *best_fit(size_t asize);
-static void place(void *ptr, size_t asize);
 static void place_ex(void *ptr, size_t asize);
 void connect_pred_succ(void *ptr);
 void connect_root(void *ptr);
+int get_class(size_t size);
+static void *find_fit_seg(size_t asize);
+static void *find_best_fit_seg(size_t asize);
 
 void *heap_listp;
-void *current_listp;
 
 /*
  * mm_init - initialize the malloc package.
@@ -92,17 +92,20 @@ void *current_listp;
 int mm_init(void)  // 초기 힙 할당과 같은 필요한 초기화를 수행한다,
 {                  // 영역 초기화 문제 시 -1, 문제 없으면 0
 
-    if ((heap_listp = mem_sbrk(6 * WSIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk((SEG_SIZE+4) * WSIZE)) == (void *)-1)
         return -1;
     PUT(heap_listp, 0);                                 // 패딩
-    PUT(heap_listp + (1 * WSIZE), PACK(DSIZE * 2, 1));  // 프롤로그 헤더
-    PUT(heap_listp + (2 * WSIZE), NULL);                // 이전 가용블록
-    PUT(heap_listp + (3 * WSIZE), NULL);                // 이후 가용블록
-    PUT(heap_listp + (4 * WSIZE), PACK(DSIZE * 2, 1));  // 프롤로그 푸터
-    PUT(heap_listp + (5 * WSIZE), PACK(0, 1));          // 에필로그 헤더 (끝을 나타내기  위해 4이지만 0 넣기)
+    PUT(heap_listp + (1 * WSIZE), PACK((SEG_SIZE+2) * WSIZE, 1));  // 프롤로그 헤더
+    for(int i = 0; i <= SEG_SIZE; i++) {
+        PUT(heap_listp + ((2+i) * WSIZE), NULL);
+    }
+    PUT(heap_listp + ((SEG_SIZE+2) * WSIZE), PACK((SEG_SIZE+2) * WSIZE, 1));   // 프롤로그 푸터
+    PUT(heap_listp + ((SEG_SIZE+3) * WSIZE) + WSIZE, PACK(0, 1));   // 에필로그 헤더 (끝을 나타내기  위해 4이지만 0 넣기)
     heap_listp += (2 * WSIZE);
-    current_listp = heap_listp;  // next_fit 전용
 
+
+    if (extend_heap(4) == NULL)
+        return -1;
     // CHUNKSIZE만큼 힙 확장 (2^12)
     if (extend_heap(CHUNKSIZE / DSIZE) == NULL)
         return -1;
@@ -140,34 +143,79 @@ void *mm_malloc(size_t size) {
         return NULL;
 
     if (size <= DSIZE)
-        asize = 3 * DSIZE;
+        asize = 2 * DSIZE;
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
 
-    if ((ptr = first_fit_ex(asize)) != NULL) {  // NULL이 아니면 >> 가용블록 찾았다!
+    if ((ptr = find_best_fit_seg(asize)) != NULL) {  // NULL이 아니면 >> 가용블록 찾았다!
         place_ex(ptr, asize);
         return ptr;
     }
     // fit 못찾으면,, ( = NULL이면)
     extendsize = MAX(asize, CHUNKSIZE);
-    // printf("사이즈 부족으로 Chuncksize %d 연장\n", extendsize);
+    // printf("사이즈 부족으로 Chuncksize %d 연장\n", extendsize);B
     if ((ptr = extend_heap(extendsize / WSIZE)) == NULL)
         return NULL;
     place_ex(ptr, asize);
     return ptr;
 }
 
-static void *first_fit_ex(size_t asize) {
-    void *ptr;
-    // int n = GET_ALLOC(HDRP(heap_listp));
-    for (ptr = heap_listp; GET_ALLOC(HDRP(ptr)) < 1; ptr = SUCC(ptr)) {  // 다음 가용 블록을 찾아서 가야함.
-        if (ptr == NULL)
-            break;
-        if (asize <= GET_SIZE(HDRP(ptr))) {
-            return ptr;
+int get_class(size_t size) {
+    if(size < 16) {
+        return -1;
+    }
+    size_t class_size[SEG_SIZE];
+    class_size[0] = 16;
+
+    for(int i = 0; i < SEG_SIZE; i++) {
+        if(i != 0) {
+            class_size[i] = class_size[i-1] << 1;
+        }
+        if(size <= class_size[i]) {
+            return i;
         }
     }
+
+    return SEG_SIZE - 1;
+}
+
+static void *find_fit_seg(size_t asize) {
+    int class = get_class(asize);
+    void *ptr = GET_ROOT(class);
+    while(class < SEG_SIZE) {
+        ptr = GET_ROOT(class);
+        while(ptr != NULL) {
+            if(asize <= GET_SIZE(HDRP(ptr))) {
+                return ptr;
+            }
+            ptr = SUCC(ptr);
+        }
+        class += 1;
+    }
     return NULL;
+}
+
+static void *find_best_fit_seg(size_t asize) {
+    int class = get_class(asize);
+    void *ptr = GET_ROOT(class);
+    void *min_ptr = NULL;
+    while(class < SEG_SIZE) {
+        ptr = GET_ROOT(class);
+        while(ptr != NULL) {
+            if(asize <= GET_SIZE(HDRP(ptr))) {
+                if(min_ptr == NULL) min_ptr = ptr;
+                else if(GET_SIZE(HDRP(ptr)) < GET_SIZE(HDRP(min_ptr)))
+                    min_ptr = ptr;
+            }
+            ptr = SUCC(ptr);
+        }
+        if(min_ptr == NULL)
+            class += 1;
+        else
+            break;
+    }
+    if(min_ptr == NULL) return NULL;
+    return min_ptr;
 }
 
 static void place_ex(void *ptr, size_t asize) {
@@ -175,7 +223,7 @@ static void place_ex(void *ptr, size_t asize) {
 
     connect_pred_succ(ptr);
 
-    if ((csize - asize) >= 3 * DSIZE) {  // 내가 사용하고 남은 블록의 사이즈가 3더블워드보다 클 때
+    if ((csize - asize) >= 2 * DSIZE) {  // 내가 사용하고 남은 블록의 사이즈가 3더블워드보다 클 때
         // printf("block 위치 %p | 들어갈 list의 크기 %d | 넣어야 할 size 크기 %d\n", (int *)ptr, GET_SIZE(HDRP(ptr)), asize);
         PUT(HDRP(ptr), PACK(asize, 1));
         PUT(FTRP(ptr), PACK(asize, 1));  // 할당블록 해주시고~
@@ -206,34 +254,33 @@ void mm_free(void *ptr) {
 }
 
 void connect_pred_succ(void *ptr) {  // 사라지는(할당되는) 가용 블록의 이전 이후를 서로 연결
-    if (ptr == heap_listp) {
-        PRED(SUCC(ptr)) = NULL;
-        heap_listp = SUCC(ptr);
-    } else {
-        SUCC(PRED(ptr)) = SUCC(ptr);  // 이전 가용블록에는 이후가용블록이 내 이후 가용블록임
-        PRED(SUCC(ptr)) = PRED(ptr);  // 이후 가용블록에는 이전 가용블록이 현재 내 블록의 이전 가용블록 주소라고 알려줘야함.
+    int class = get_class(GET_SIZE(HDRP(ptr)));
+    if (ptr == GET_ROOT(class)) {
+        GET_ROOT(class) = SUCC(ptr);
+        return;
+    }
+    SUCC(PRED(ptr)) = SUCC(ptr);        // 이전 가용블록에는 이후가용블록이 내 이후 가용블록임
+    if(SUCC(ptr) != NULL) {
+        PRED(SUCC(ptr)) = PRED(ptr);    // 이후 가용블록에는 이전 가용블록이 현재 내 블록의 이전 가용블록 주소라고 알려줘야함.
     }
 }
 
 void connect_root(void *ptr) {
-    SUCC(ptr) = heap_listp;
-    PRED(ptr) = NULL;
-    PRED(heap_listp) = ptr;
-    heap_listp = ptr;
-
-    // PUT(ptr + WSIZE, SUCC(heap_listp)); // 내 이후 가용블록은 루트의 이후 가용블록
-    // PUT(heap_listp + WSIZE, ptr); // 루트의 이후 가용블록은 나
-    // PUT(ptr, heap_listp);   // 내 이전 가용블록은 루트
+    int class = get_class(GET_SIZE(HDRP(ptr)));
+    SUCC(ptr) = GET_ROOT(class);
+    if(GET_ROOT(class) != NULL) {       // NULL이라는 것은 블록이 없다는 것.
+        PRED(GET_ROOT(class)) = ptr;
+    }
+    GET_ROOT(class) = ptr;
 }
 
-static void *coalesce_ex(void *ptr) {                     //
+static void *coalesce_ex(void *ptr) {                     
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(ptr)));  // 이전 블록의 가용 여부
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));  // 다음 블록의 가용 여부
     size_t size = GET_SIZE(HDRP(ptr));                    // 현재 블록의 크기
 
     if (prev_alloc && next_alloc) {  // 이전, 이후 모두 할당 되어 있는 경우 > 안 합침 , 내가 루트 다음이 된다.
         connect_root(ptr);
-        current_listp = ptr;
         return ptr;
     }
 
@@ -262,7 +309,6 @@ static void *coalesce_ex(void *ptr) {                     //
     }
 
     connect_root(ptr);  // 가용 리스트에 블록 추가
-    current_listp = ptr;
     return ptr;
 }
 
