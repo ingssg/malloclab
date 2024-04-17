@@ -82,6 +82,7 @@ static void place(void *ptr, size_t asize);
 static void place_ex(void *ptr, size_t asize);
 void connect_pred_succ(void *ptr);
 void connect_root(void *ptr);
+static void *find_best_fit(size_t asize);
 
 void *heap_listp;
 void *current_listp;
@@ -144,7 +145,7 @@ void *mm_malloc(size_t size) {
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
 
-    if ((ptr = first_fit_ex(asize)) != NULL) {  // NULL이 아니면 >> 가용블록 찾았다!
+    if ((ptr = find_best_fit(asize)) != NULL) {  // NULL이 아니면 >> 가용블록 찾았다!
         place_ex(ptr, asize);
         return ptr;
     }
@@ -168,6 +169,21 @@ static void *first_fit_ex(size_t asize) {
         }
     }
     return NULL;
+}
+
+static void *find_best_fit(size_t asize) {
+    void *ptr = heap_listp;
+    void *min_ptr = NULL;
+    while(ptr != NULL) {
+        if(asize <= GET_SIZE(HDRP(ptr))) {
+            if(min_ptr == NULL) min_ptr = ptr;
+            else if(GET_SIZE(HDRP(ptr)) < GET_SIZE(HDRP(min_ptr)))
+                min_ptr = ptr;
+        }
+        ptr = SUCC(ptr);
+    }
+    if(min_ptr == NULL) return NULL;
+    return min_ptr;
 }
 
 static void place_ex(void *ptr, size_t asize) {
