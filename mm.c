@@ -145,7 +145,7 @@ void *mm_malloc(size_t size) {
     else
         asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
 
-    if ((ptr = find_best_fit(asize)) != NULL) {  // NULL이 아니면 >> 가용블록 찾았다!
+    if ((ptr = first_fit_ex(asize)) != NULL) {  // NULL이 아니면 >> 가용블록 찾았다!
         place_ex(ptr, asize);
         return ptr;
     }
@@ -160,7 +160,6 @@ void *mm_malloc(size_t size) {
 
 static void *first_fit_ex(size_t asize) {
     void *ptr;
-    // int n = GET_ALLOC(HDRP(heap_listp));
     for (ptr = heap_listp; GET_ALLOC(HDRP(ptr)) < 1; ptr = SUCC(ptr)) {  // 다음 가용 블록을 찾아서 가야함.
         if (ptr == NULL)
             break;
@@ -290,12 +289,73 @@ static void *coalesce_ex(void *ptr) {                     //
 void *mm_realloc(void *ptr, size_t size) {
     void *oldptr = ptr;
     void *newptr;
+    void *prev_ptr = PREV_BLKP(ptr);
+    void *next_ptr = NEXT_BLKP(ptr);
     size_t copySize;
+    size_t asize;
+    size_t csize = GET_SIZE(HDRP(ptr));
+    size_t prev_alloc = GET_ALLOC(HDRP(prev_ptr));
+    size_t next_alloc = GET_ALLOC(HDRP(next_ptr));
+    size_t prev_size = GET_SIZE(HDRP(prev_ptr));
+    size_t next_size = GET_SIZE(HDRP(next_ptr));
 
-    newptr = mm_malloc(size);
+    if(size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
+
+    if (size <= DSIZE)
+        asize = 2 * DSIZE;
+    else
+        asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    
+    // 이전 가용블록이 요청 크기보다 크다면 그냥 거기에 덮어씌우기
+    if(!prev_alloc && prev_size > asize) {
+        memcpy(prev_ptr, ptr, asize);
+        connect_pred_succ(prev_ptr);
+        PUT(HDRP(prev_ptr), PACK(prev_size, 1));
+        PUT(FTRP(prev_ptr), PACK(prev_size, 1));
+        mm_free(ptr);
+
+        return prev_ptr;
+    }
+
+    // 이후 가용블록이 요청 크기보다 크다면 그냥 거기에 덮어씌우기
+    if(!next_alloc && next_size > asize) {
+        memcpy(next_ptr, ptr, asize);
+        connect_pred_succ(next_ptr);
+        PUT(HDRP(next_ptr), PACK(next_size, 1));
+        PUT(FTRP(next_ptr), PACK(next_size, 1));
+        mm_free(ptr);
+
+        return next_ptr;
+    }
+    // 이전 가용블록 + 현재 블록 > 요청 크기면 이전 가용블록 + 현재로 덮어씌우기, 근데오류남(why???)
+    // if(!prev_alloc && csize + prev_size > asize) {
+    //     memmove(prev_ptr, ptr, asize);
+    //     connect_pred_succ(prev_ptr);
+    //     PUT(HDRP(prev_ptr), PACK(csize + prev_size, 1));
+    //     PUT(HDRP(prev_ptr), PACK(csize + prev_size, 1));
+    //     return prev_ptr;
+    // }
+
+    // 이후 가용블록 + 현재 블록 > 요청 크기면 이후 가용블록 + 현재로 덮어씌우기
+    if(!next_alloc && csize + next_size > asize) {
+        // 빠진 가용블록에 대한 처리
+        connect_pred_succ(next_ptr);
+        // 헤더 푸터 갱신
+        PUT(HDRP(ptr), PACK(csize+next_size, 1));
+        PUT(FTRP(ptr), PACK(csize+next_size, 1));
+
+        return ptr;
+    }
+
+
+
+
+    newptr = mm_malloc(size);   // 말록에서 어차피 두개 나눠서 저장해줌.
     if (newptr == NULL)
         return NULL;
-    // copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
     copySize = GET_SIZE(HDRP(oldptr));
     if (size < copySize)
         copySize = size;
