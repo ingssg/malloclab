@@ -46,7 +46,7 @@ team_t team = {
 // 사이즈 상수 정의
 #define WSIZE 4
 #define DSIZE 8
-#define CHUNKSIZE (1 << 9)
+#define CHUNKSIZE (1 << 10)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -64,7 +64,6 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp)-GET_SIZE(((char *)(bp)-DSIZE)))
 
-// #define PRED(bp) (GET(bp))
 #define PRED(bp) (*(void **)(bp))
 #define SUCC(bp) (*(void **)(bp + WSIZE))
 
@@ -97,15 +96,15 @@ int mm_init(void)  // 초기 힙 할당과 같은 필요한 초기화를 수행�
     PUT(heap_listp, 0);                                 // 패딩
     PUT(heap_listp + (1 * WSIZE), PACK((SEG_SIZE+2) * WSIZE, 1));  // 프롤로그 헤더
     for(int i = 0; i <= SEG_SIZE; i++) {
-        PUT(heap_listp + ((2+i) * WSIZE), NULL);
+        PUT(heap_listp + ((2+i) * WSIZE), NULL);    // segregated 리스트 포인터 저장
     }
     PUT(heap_listp + ((SEG_SIZE+2) * WSIZE), PACK((SEG_SIZE+2) * WSIZE, 1));   // 프롤로그 푸터
     PUT(heap_listp + ((SEG_SIZE+3) * WSIZE) + WSIZE, PACK(0, 1));   // 에필로그 헤더 (끝을 나타내기  위해 4이지만 0 넣기)
     heap_listp += (2 * WSIZE);
 
 
-    if (extend_heap(4) == NULL)
-        return -1;
+    // if (extend_heap(4) == NULL)
+    //     return -1;
     // CHUNKSIZE만큼 힙 확장 (2^12)
     if (extend_heap(CHUNKSIZE / DSIZE) == NULL)
         return -1;
@@ -154,12 +153,13 @@ void *mm_malloc(size_t size) {
     // fit 못찾으면,, ( = NULL이면)
     extendsize = MAX(asize, CHUNKSIZE);
     // printf("사이즈 부족으로 Chuncksize %d 연장\n", extendsize);B
-    if ((ptr = extend_heap(extendsize / WSIZE)) == NULL)
+    if ((ptr = extend_heap(extendsize/WSIZE)) == NULL)
         return NULL;
     place_ex(ptr, asize);
     return ptr;
 }
 
+// 해당 사이즈에 대한 클래스를 반환
 int get_class(size_t size) {
     if(size < 16) {
         return -1;
@@ -179,6 +179,7 @@ int get_class(size_t size) {
     return SEG_SIZE - 1;
 }
 
+// first_fit
 static void *find_fit_seg(size_t asize) {
     int class = get_class(asize);
     void *ptr = GET_ROOT(class);
@@ -195,6 +196,7 @@ static void *find_fit_seg(size_t asize) {
     return NULL;
 }
 
+// best_fit
 static void *find_best_fit_seg(size_t asize) {
     int class = get_class(asize);
     void *ptr = GET_ROOT(class);
@@ -223,7 +225,7 @@ static void place_ex(void *ptr, size_t asize) {
 
     connect_pred_succ(ptr);
 
-    if ((csize - asize) >= 2 * DSIZE) {  // 내가 사용하고 남은 블록의 사이즈가 3더블워드보다 클 때
+    if ((csize - asize) >= 2 * DSIZE) {  // 내가 사용하고 남은 블록의 사이즈가 2더블워드보다 클 때
         // printf("block 위치 %p | 들어갈 list의 크기 %d | 넣어야 할 size 크기 %d\n", (int *)ptr, GET_SIZE(HDRP(ptr)), asize);
         PUT(HDRP(ptr), PACK(asize, 1));
         PUT(FTRP(ptr), PACK(asize, 1));  // 할당블록 해주시고~
@@ -233,7 +235,7 @@ static void place_ex(void *ptr, size_t asize) {
         PUT(HDRP(ptr), PACK(csize - asize, 0));
         PUT(FTRP(ptr), PACK(csize - asize, 0));  // 사용하고 남은 가용 블록 해주시고
         connect_root(ptr);
-    } else {  // 내가 사용하고 남은 블록의 사이즈가 3더블워드 사이즈보다 작을 때(풀로 채움, 새로 생기는 가용블록 없음) > 내 앞뒤 가용블록끼리 연결해줘야함
+    } else {  // 내가 사용하고 남은 블록의 사이즈가 2더블워드 사이즈보다 작을 때(풀로 채움, 새로 생기는 가용블록 없음) > 내 앞뒤 가용블록끼리 연결해줘야함
         // printf("block 위치 %p | padding으로 넣은 size 크기 %d\n", (unsigned int *)ptr, csize - asize);
 
         PUT(HDRP(ptr), PACK(csize, 1));
@@ -275,7 +277,7 @@ void connect_root(void *ptr) {
 }
 
 static void *coalesce_ex(void *ptr) {                     
-    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(ptr)));  // 이전 블록의 가용 여부
+    size_t prev_alloc = GET_ALLOC(HDRP(PREV_BLKP(ptr)));  // 이전 블록의 가용 여부
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));  // 다음 블록의 가용 여부
     size_t size = GET_SIZE(HDRP(ptr));                    // 현재 블록의 크기
 
@@ -315,17 +317,78 @@ static void *coalesce_ex(void *ptr) {
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  * 최소한 크기의 할당된 영역에 대한 포인터를 반환.
- * 포인터가 null인 경우 호출은 mm malloc(size)와 동일, 크기가 0이면 호출은 mm free(prt)과 동일
+ * 크기가 0이면 호출은 mm free(prt)과 동일
  */
 void *mm_realloc(void *ptr, size_t size) {
     void *oldptr = ptr;
     void *newptr;
+    void *prev_ptr = PREV_BLKP(ptr);
+    void *next_ptr = NEXT_BLKP(ptr);
     size_t copySize;
+    size_t asize;
+    size_t csize = GET_SIZE(HDRP(ptr));
+    size_t prev_alloc = GET_ALLOC(HDRP(prev_ptr));
+    size_t next_alloc = GET_ALLOC(HDRP(next_ptr));
+    size_t prev_size = GET_SIZE(HDRP(prev_ptr));
+    size_t next_size = GET_SIZE(HDRP(next_ptr));
 
-    newptr = mm_malloc(size);
+    if(size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
+
+    if (size <= DSIZE)
+        asize = 2 * DSIZE;
+    else
+        asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    
+    // 이전 가용블록이 요청 크기보다 크다면 그냥 거기에 덮어씌우기
+    if(!prev_alloc && prev_size > asize) {
+        memcpy(prev_ptr, ptr, asize);
+        connect_pred_succ(prev_ptr);
+        PUT(HDRP(prev_ptr), PACK(prev_size, 1));
+        PUT(FTRP(prev_ptr), PACK(prev_size, 1));
+        mm_free(ptr);
+
+        return prev_ptr;
+    }
+
+    // 이후 가용블록이 요청 크기보다 크다면 그냥 거기에 덮어씌우기
+    if(!next_alloc && next_size > asize) {
+        memcpy(next_ptr, ptr, asize);
+        connect_pred_succ(next_ptr);
+        PUT(HDRP(next_ptr), PACK(next_size, 1));
+        PUT(FTRP(next_ptr), PACK(next_size, 1));
+        mm_free(ptr);
+
+        return next_ptr;
+    }
+    // 이전 가용블록 + 현재 블록 > 요청 크기면 이전 가용블록 + 현재로 덮어씌우기, 근데오류남(why???)
+    // if(!prev_alloc && csize + prev_size > asize) {
+    //     memmove(prev_ptr, ptr, asize);
+    //     connect_pred_succ(prev_ptr);
+    //     PUT(HDRP(prev_ptr), PACK(csize + prev_size, 1));
+    //     PUT(HDRP(prev_ptr), PACK(csize + prev_size, 1));
+    //     return prev_ptr;
+    // }
+
+    // 이후 가용블록 + 현재 블록 > 요청 크기면 이후 가용블록 + 현재로 덮어씌우기
+    if(!next_alloc && csize + next_size > asize) {
+        // 빠진 가용블록에 대한 처리
+        connect_pred_succ(next_ptr);
+        // 헤더 푸터 갱신
+        PUT(HDRP(ptr), PACK(csize+next_size, 1));
+        PUT(FTRP(ptr), PACK(csize+next_size, 1));
+
+        return ptr;
+    }
+
+
+
+
+    newptr = mm_malloc(size);   // 말록에서 어차피 두개 나눠서 저장해줌.
     if (newptr == NULL)
         return NULL;
-    // copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
     copySize = GET_SIZE(HDRP(oldptr));
     if (size < copySize)
         copySize = size;
