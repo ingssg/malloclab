@@ -1,52 +1,21 @@
-#####################################################################
-# CS:APP Malloc Lab
-# Handout files for students
-#
-# Copyright (c) 2002, R. Bryant and D. O'Hallaron, All rights reserved.
-# May not be used, modified, or copied without permission.
-#
-######################################################################
+## 시도방식
+### implicit 
+- first-fit    ( 53/100 )
+- next-fit   ( 82/100 )
+- best-fit   ( 53/100 )
+### explicit (LIFO)
+- first-fit    ( 82/100 )
+- best-fit   ( 67/100 )
+### segregated
+- first-fit    ( 85/100 )
+- best-fit   ( 85/100 )
+- best-fit + realloc 수정 ( 90/100 )
+- best-fit + realloc 재수정 + size 2의 제곱수로 맞추기 ( 96/100 )
 
-***********
-Main Files:
-***********
+<br/>
 
-mm.{c,h}	
-	Your solution malloc package. mm.c is the file that you
-	will be handing in, and is the only file you should modify.
+## main
+### Segregated List + best-fit + realloc 재수정 + size 2의 제곱수로 맞추기
+( 96/100 )
 
-mdriver.c	
-	The malloc driver that tests your mm.c file
-
-short{1,2}-bal.rep
-	Two tiny tracefiles to help you get started. 
-
-Makefile	
-	Builds the driver
-
-**********************************
-Other support files for the driver
-**********************************
-
-config.h	Configures the malloc lab driver
-fsecs.{c,h}	Wrapper function for the different timer packages
-clock.{c,h}	Routines for accessing the Pentium and Alpha cycle counters
-fcyc.{c,h}	Timer functions based on cycle counters
-ftimer.{c,h}	Timer functions based on interval timers and gettimeofday()
-memlib.{c,h}	Models the heap and sbrk function
-
-*******************************
-Building and running the driver
-*******************************
-To build the driver, type "make" to the shell.
-
-To run the driver on a tiny test trace:
-
-	unix> mdriver -V -f short1-bal.rep
-
-The -V option prints out helpful tracing and summary information.
-
-To get a list of the driver flags:
-
-	unix> mdriver -h
-
+![image](https://github.com/ingssg/malloclab/assets/80662781/fb6b060a-c2d2-4536-84e2-a6f11944aa2e)
